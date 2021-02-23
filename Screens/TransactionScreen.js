@@ -9,6 +9,9 @@ import {
   StyleSheet,
   TouchableOpacity,
   Image,
+  KeyboardAvoidingView,
+  Alert,
+  ToastAndroid,
 } from 'react-native';
 import { TextInput } from 'react-native-gesture-handler';
 
@@ -49,28 +52,98 @@ export default class Transaction extends React.Component{
       }
     )}
   }
-  handleTransaction=()=>{
-    var transactionMessage;
-    db.collection('Books').doc(this.state.scannedBookId).get()
-    .then(doc=>{
-      console.log(doc.data())
-      var book=doc.data()
-      if (book.bookAvailability){
+  handleTransaction=async()=>{
+    var transcationType=await this.checkBookEligibility();
+    if (!transcationType){
+      Alert.alert('The book doesn\'t exist in the database')
+      this.setState({
+        scannedBookId:'',
+        scannedStudentId:''
+      })
+    }else if(transcationType==='Issue'){
+      var studentEligible=await this.checkStudentEligibilityForBookIssue()
+      if (studentEligible){
         this.initiateBookIssue()
-        transactionMessage='bookIssued'
+        Alert.alert('Book issued to the student')
       }else{
-        this.initiateBookReturn()
-        transactionMessage='bookReturned'
+        var studentEligible= await this.checkStudentEligibilityForBookReturn()
+        if (studentEligible){
+          this.initiateBookReturn()
+          Alert.alert('Book Returned')
       }
-    })
-    this.setState({
-      transactionMessage:transactionMessage
-    })
+    }
+  }
+  checkBookEligibility=async()=>{
+    const bookRef=await db.collection('Books').where('bookId','==',this.state.scannedBookId).get()
+    var transcationType=''
+    if (bookRef.docs.length==0){
+      transcationType=false
+    }else{
+      bookRef.docs.map(doc=>{
+        var book=doc.data()
+        if (book.bookAvailability){
+          transcationType='Issue'
+          Alert.alert('Book Issued')
+        }else{
+          transcationType='Return'
+          Alert.alert('Book Returned')
+
+        }
+      })
+    }
+    
+    return transcationType
+  }
+  checkStudentEligibilityForBookIssue=async()=>{
+    const studentRef=await db.collection('Students').where('studentId','==',this.state.scannedStudentId).get()
+    var studentEligible=''
+    if (studentRef.docs.length==0){
+      this.setState({
+        scannedBookId:'',
+        scannedStudentId:''
+      })
+      studentEligible=false
+      Alert.alert('The student can\'t return the book')
+    }else{
+      studentRef.docs.map(doc=>{
+        var student=doc.data()
+        if (student.numberOfBooksIssued>0){
+          studentEligible=true
+        }else{
+          studentEligible=false
+          Alert.alert('The student can\'t return the book')
+          this.setState({
+            scannedBookId:'',
+            scannedStudentId:''
+          })
+        }
+      })
+    }
+    return studentEligible
+  }
+  checkStudentEligibilityForBookReturn=async()=>{
+    const transactionRef=await db.collection('transaction').where('bookId','==',this.state.scannedBookId).limit(1).get()
+    var studentEligible=''
+      transactionRef.docs.map(doc=>{
+        var lastBookTransaction=doc.data()
+        if (lastBookTransaction.studentId===this.scannedStudentId){
+          studentEligible=true
+        }else{
+          studentEligible=false
+          Alert.alert('The book wasn\'t borrowed by the student')
+          this.setState({
+            scannedBookId:'',
+            scannedStudentId:''
+          })
+        }
+      })
+    }
+    return studentEligible
   }
   initiateBookIssue=async()=>{
     db.collection('transaction').add({
       'studentId':this.state.scannedStudentId,
-      'bookId':this.state.bookId,
+      'bookId':this.state.scannedBookId,
       'data':firebase.firestore.Timestamp.now().toDate(),
       'transcationType':'Issue'
     })
@@ -80,6 +153,7 @@ export default class Transaction extends React.Component{
     db.collection('Students').doc(this.state.scannedStudentId).update({
       'numberOfBooksIssued':firebase.firestore.FieldValue.increment(1)
     })
+    Alert.alert('Book issued')
     this.setState({
       scannedStudentId:'',
       scannedBookId:'',
@@ -88,7 +162,7 @@ export default class Transaction extends React.Component{
   initiateBookReturn=async()=>{
     db.collection('transaction').add({
       'studentId':this.state.scannedStudentId,
-      'bookId':this.state.bookId,
+      'bookId':this.state.scannedBookId,
       'data':firebase.firestore.Timestamp.now().toDate(),
       'transcationType':'Return'
     })
@@ -98,6 +172,7 @@ export default class Transaction extends React.Component{
     db.collection('Students').doc(this.state.scannedStudentId).update({
       'numberOfBooksIssued':firebase.firestore.FieldValue.increment(-1)
     })
+    Alert.alert('Book returned')
     this.setState({
       scannedStudentId:'',
       scannedBookId:'',
@@ -117,13 +192,20 @@ export default class Transaction extends React.Component{
       
       else if (buttonState=='normal'){
         return (
+          <KeyboardAvoidingView style={{flex: 1, backgroundColor: '#fff',justifyContent:'center',alignItems:'center',}} >
           <View style={{flex: 1, backgroundColor: '#fff',justifyContent:'center',alignItems:'center'}}>
             <View>
               <Image source={require('../assets_main/booklogo.jpg')} style={{width:100,height:100,marginBottom:20}}/>
             </View>
             <View style={styles.inputView}>
               <TextInput style={styles.inputBox} 
-              placeholder={'bookid'} value={
+              placeholder={'bookid'} 
+              onChangeText={(text)=>{
+                this.setState({
+                  scannedBookId:text
+                })
+              }}
+              value={
                 this.state.scannedBookId
               }/>
               <TouchableOpacity style={styles.button2} onPress={()=>{
@@ -132,7 +214,19 @@ export default class Transaction extends React.Component{
             </View>
             <View style={styles.inputView}>
               <TextInput style={styles.inputBox} 
-              placeholder={'studentid'} value={
+              placeholder={'studentid'}
+              onChangeText={(text)=>{
+                this.setState({
+                  scannedStudentId:text
+                })
+              }} 
+              keyboardVerticalOffset={
+                Platform.select({
+                   ios: () => 0,
+                   android: () => 0
+                })()
+              }
+              value={
                 this.state.scannedStudentId
               }/>
               <TouchableOpacity style={styles.button2} onPress={()=>{
@@ -142,6 +236,7 @@ export default class Transaction extends React.Component{
             <Text style={styles.text1}>{hasCameraPermissions==true?this.state.scannedData:'Request camera permission'}</Text>
             <TouchableOpacity style={styles.button} onPress={()=>{this.handleTransaction()}}><Text style={styles.text}>Submit</Text></TouchableOpacity>
           </View>
+          </KeyboardAvoidingView>
         )
       }
     }
